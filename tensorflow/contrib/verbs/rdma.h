@@ -385,6 +385,9 @@ class RdmaAdapter {
 
  protected:
   static const int MAX_CONCURRENT_WRITES = 1000;
+
+  ibv_device* dev_;
+
   ibv_context* context_;
   // RDMA configuration parameters
   RdmaParams params_;
@@ -520,6 +523,8 @@ class RdmaMessageBuffer {
   BufferStatus local_status_ GUARDED_BY(mu_) = none;
   BufferStatus remote_status_ GUARDED_BY(mu_) = none;
 };
+
+ibv_device* set_device();
 
 }  // namespace tensorflow
 

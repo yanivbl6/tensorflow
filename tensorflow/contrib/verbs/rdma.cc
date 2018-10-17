@@ -135,7 +135,11 @@ ibv_device* set_device() {
         CHECK(get_dev_active_port_count(dev_list[device_index]) != 0)
             << "Device " << ibv_get_device_name(dev_list[device_index])
             << " has no active ports";
-        return dev_list[device_index];
+
+        ibv_device* dev = (ibv_device*) malloc(sizeof(ibv_device));
+        *dev =*(dev_list[device_index]);
+        ibv_free_device_list(dev_list);
+        return dev;
       }
     }
     // check validity of input device
@@ -158,8 +162,13 @@ ibv_device* set_device() {
     }
     CHECK(num_devs_with_active_port > 0)
         << "There is no active port in the system";
+    ibv_device* dev = (ibv_device*) malloc(sizeof(ibv_device));
+    *dev =*(dev_list[device_to_open]);
+    ibv_free_device_list(dev_list);
+
     return dev_list[device_to_open];
   }
+  ibv_free_device_list(dev_list);
   CHECK(false) << "No device was set!";
   return NULL;  // never happens
 }
@@ -402,7 +411,7 @@ ibv_pd* alloc_protection_domain(ibv_context* context) {
 }
 
 RdmaAdapter::RdmaAdapter(const WorkerEnv* worker_env)
-    : context_(open_device(set_device())),
+    : dev_(set_device()), context_(open_device(dev_)),
       params_(params_init(context_)),
       pd_(alloc_protection_domain(context_)),
       worker_env_(worker_env) {
@@ -421,6 +430,10 @@ RdmaAdapter::~RdmaAdapter() {
       << "Failed to destroy channel";
   CHECK(!ibv_dealloc_pd(pd_)) << "Failed to deallocate PD";
   CHECK(!ibv_close_device(context_)) << "Failed to release context";
+
+  if (dev_){
+      free(dev_);
+  }
 }
 
 void RdmaAdapter::StartPolling() {
