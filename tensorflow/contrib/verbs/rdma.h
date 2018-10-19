@@ -376,7 +376,7 @@ class RdmaAdapter {
   friend class RdmaRemoteRendezvous;
 
  public:
-  RdmaAdapter(const WorkerEnv* worker_env);
+  RdmaAdapter(const WorkerEnv* worker_env, ibv_context* ctx);
   ~RdmaAdapter();
   // Adapter name, e.g. mlx5_0.
   string name() const;
@@ -385,8 +385,6 @@ class RdmaAdapter {
 
  protected:
   static const int MAX_CONCURRENT_WRITES = 1000;
-
-  ibv_device* dev_;
 
   ibv_context* context_;
   // RDMA configuration parameters
@@ -524,7 +522,9 @@ class RdmaMessageBuffer {
   BufferStatus remote_status_ GUARDED_BY(mu_) = none;
 };
 
-ibv_device* set_device();
+ibv_context* set_device(int* numa_idx);
+
+int TryToReadNumaNode(ibv_device* device);
 
 }  // namespace tensorflow
 

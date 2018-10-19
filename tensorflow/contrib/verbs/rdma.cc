@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <fcntl.h>
 #include <cstdlib>
+#include <fstream>
 
 #include "tensorflow/contrib/verbs/rdma.h"
 #include "tensorflow/contrib/verbs/verbs_service.pb.h"
@@ -118,7 +119,7 @@ int get_dev_active_port_count(ibv_device* device) {
 // Fails if more than one device with active port was found.
 // Returns:
 //   device to use
-ibv_device* set_device() {
+ibv_context* set_device(int* numa_idx) {
   ibv_device** dev_list;
   int dev_num, device_index, device_to_open = 0;
   int num_devs_with_active_port = 0;
@@ -136,10 +137,11 @@ ibv_device* set_device() {
             << "Device " << ibv_get_device_name(dev_list[device_index])
             << " has no active ports";
 
-        ibv_device* dev = (ibv_device*) malloc(sizeof(ibv_device));
-        *dev =*(dev_list[device_index]);
+        ibv_context* ctx = open_device(dev_list[device_index]);
+        if (numa_idx)
+          *numa_idx = TryToReadNumaNode(dev_list[device_index]) + 1;
         ibv_free_device_list(dev_list);
-        return dev;
+        return ctx;
       }
     }
     // check validity of input device
@@ -162,11 +164,12 @@ ibv_device* set_device() {
     }
     CHECK(num_devs_with_active_port > 0)
         << "There is no active port in the system";
-    ibv_device* dev = (ibv_device*) malloc(sizeof(ibv_device));
-    *dev =*(dev_list[device_to_open]);
-    ibv_free_device_list(dev_list);
 
-    return dev_list[device_to_open];
+    ibv_context* ctx = open_device(dev_list[device_to_open]);
+    if (numa_idx)
+      *numa_idx = TryToReadNumaNode(dev_list[device_to_open]) + 1;
+    ibv_free_device_list(dev_list);
+    return ctx;
   }
   ibv_free_device_list(dev_list);
   CHECK(false) << "No device was set!";
@@ -410,8 +413,8 @@ ibv_pd* alloc_protection_domain(ibv_context* context) {
   return pd;
 }
 
-RdmaAdapter::RdmaAdapter(const WorkerEnv* worker_env)
-    : dev_(set_device()), context_(open_device(dev_)),
+RdmaAdapter::RdmaAdapter(const WorkerEnv* worker_env, ibv_context* ctx)
+    : context_(ctx),
       params_(params_init(context_)),
       pd_(alloc_protection_domain(context_)),
       worker_env_(worker_env) {
@@ -430,10 +433,7 @@ RdmaAdapter::~RdmaAdapter() {
       << "Failed to destroy channel";
   CHECK(!ibv_dealloc_pd(pd_)) << "Failed to deallocate PD";
   CHECK(!ibv_close_device(context_)) << "Failed to release context";
-
-  if (dev_){
-      free(dev_);
-  }
+ 
 }
 
 void RdmaAdapter::StartPolling() {
@@ -1682,6 +1682,39 @@ void RdmaTensorRequest::Start() {
   } else {
     Send(RDMA_MESSAGE_TENSOR_REQUEST);
   }
+}
+
+int TryToReadNumaNode(ibv_device* device) {
+#if defined(__APPLE__)
+  LOG(INFO) << "OS X does not support NUMA - returning NUMA node 0";
+  return 0;
+#elif defined(PLATFORM_WINDOWS)
+  // Windows support for NUMA is not currently implemented. Return node 0.
+  return 0;
+#else
+  VLOG(2) << "Trying to read NUMA node for device: " << device->name;
+  static const int kUnknownNumaNode = -1;
+
+  auto filename = string(device->ibdev_path) + "/device/numa_node";
+
+  std::ifstream ifs(filename.c_str());
+  string content;
+  CHECK(std::getline(ifs, content));
+
+  int32 value;
+  if (strings::safe_strto32(content, &value)) {
+    if (value < 0) {
+      LOG(INFO) << "Successful NUMA node read from SysFS had negative value ("
+                << value
+                << "), but there must be at least one NUMA node"
+                   ", so returning NUMA node zero";
+      return 0;
+    }
+    LOG(INFO) << "NUMA node for device: " << device->name << " is " << value;
+    return value;
+  }
+  return kUnknownNumaNode;
+#endif
 }
 
 }  // end namespace tensorflow

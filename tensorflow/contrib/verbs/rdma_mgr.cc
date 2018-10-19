@@ -16,8 +16,9 @@ limitations under the License.
 #ifdef TENSORFLOW_USE_VERBS
 
 #include "tensorflow/contrib/verbs/rdma_mgr.h"
-#include <fstream>
 #include <vector>
+#include <fstream>
+
 #include "tensorflow/contrib/verbs/grpc_verbs_client.h"
 #include "tensorflow/contrib/verbs/verbs_service.pb.h"
 #include "tensorflow/core/common_runtime/gpu/gpu_process_state.h"
@@ -33,9 +34,9 @@ limitations under the License.
 namespace tensorflow {
 
 RdmaMgr::RdmaMgr(const WorkerEnv* const worker_env,
-                 GrpcChannelCache* const channel_cache)
+                 GrpcChannelCache* const channel_cache, ibv_context* ctx)
     : worker_env_(worker_env), channel_cache_(channel_cache) {
-  rdma_adapter_ = new RdmaAdapter(worker_env_);
+  rdma_adapter_ = new RdmaAdapter(worker_env_, ctx);
   // hardcoded to default session (legacy_session_)
   // TODO: use WorkerSessionForSession
   // need to pass in session handle
@@ -217,39 +218,6 @@ bool IsGDRAvailable() {
 #endif
 }
 
-int TryToReadNumaNode(ibv_device* device) {
-#if defined(__APPLE__)
-  LOG(INFO) << "OS X does not support NUMA - returning NUMA node 0";
-  return 0;
-#elif defined(PLATFORM_WINDOWS)
-  // Windows support for NUMA is not currently implemented. Return node 0.
-  return 0;
-#else
-  VLOG(2) << "Trying to read NUMA node for device: " << device->name;
-  static const int kUnknownNumaNode = -1;
-
-  auto filename = string(device->ibdev_path) + "/device/numa_node";
-
-  std::ifstream ifs(filename.c_str());
-  string content;
-  CHECK(std::getline(ifs, content));
-
-  int32 value;
-  if (strings::safe_strto32(content, &value)) {
-    if (value < 0) {
-      LOG(INFO) << "Successful NUMA node read from SysFS had negative value ("
-                << value
-                << "), but there must be at least one NUMA node"
-                   ", so returning NUMA node zero";
-      return 0;
-    }
-    LOG(INFO) << "NUMA node for device: " << device->name << " is " << value;
-    return value;
-  }
-  return kUnknownNumaNode;
-#endif
-}
-
 void MRDeleter(ibv_mr* mr) {
   if (mr) {
     ibv_dereg_mr(mr);
@@ -262,7 +230,8 @@ void RdmaMgr::InitAllocators() {
       flag, [this]() { RdmaMemoryMgr::Singleton().pd_ = rdma_adapter_->pd_; });
 }
 
-void RdmaMgr::RegMemVisitors() {
+void RdmaMgr::RegMemVisitors(int32_t bus_id) {
+  //bus id is current unused
   SubAllocator::Visitor alloc_visitor = [](void* ptr, int numa_node,
                                            size_t num_bytes) {
     RdmaMemoryMgr::Singleton().InsertMemoryRegion(
@@ -277,28 +246,25 @@ void RdmaMgr::RegMemVisitors() {
   ProcessState::singleton()->AddCPUFreeVisitor(free_visitor);
 
 #if GOOGLE_CUDA
+  for (int numa_idx = 0; numa_idx < port::NUMANumNodes(); ++numa_idx) {
+    GPUProcessState::singleton()->AddCUDAHostAllocVisitor(numa_idx,
+                                                            alloc_visitor);
+  } 
   if (IsGDRAvailable()) {
     // Note we don't free allocated GPU memory so there is no free visitor
-    ibv_device* dev = set_device();
-    int32_t bus_id = TryToReadNumaNode(dev) + 1;
-    free(dev);
 
     SubAllocator::Visitor cuda_alloc_visitor = [](void* ptr, int gpu_id,
                                                   size_t num_bytes) {
       RdmaMemoryMgr::Singleton().InsertMemoryRegion(
           ptr, num_bytes, strings::StrCat("GPU:", gpu_id));
     };
-    GPUProcessState::singleton()->AddGPUAllocVisitor(bus_id,
-                                                     cuda_alloc_visitor);
-
     for (int numa_idx = 0; numa_idx < port::NUMANumNodes(); ++numa_idx) {
-      GPUProcessState::singleton()->AddCUDAHostAllocVisitor(numa_idx,
-                                                            alloc_visitor);
-      LOG(INFO) << "Instrumenting Cuda host allocator on numa " << numa_idx;
-    }
+      GPUProcessState::singleton()->AddGPUAllocVisitor(numa_idx,
+                                                     cuda_alloc_visitor);
+      GPUProcessState::singleton()->AddCUDAHostFreeVisitor(numa_idx, free_visitor);
 
-    GPUProcessState::singleton()->AddCUDAHostFreeVisitor(bus_id, free_visitor);
-    LOG(INFO) << "Instrumenting GPU allocator with bus_id " << bus_id;
+    }
+    LOG(INFO) << "Instrumenting Cuda allocators on all numas";
   }
 #endif  // GOOGLE_CUDA
 }
