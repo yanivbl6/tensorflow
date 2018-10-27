@@ -1647,7 +1647,6 @@ void RdmaTensorRequest::RecvTensorContent() {
     GPUUtil::CopyCPUTensorToGPU(proxy_tensor_, recv_args_.device_context,
                                 dst_dev_, result_tensor_,
                                 [this](const Status& s) {
-                                  CHECK(s.ok()) << "copy tensor to gpu sync";
                                   Done(s);
                                 });
     return;
