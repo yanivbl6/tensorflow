@@ -205,6 +205,10 @@ class SYCLDevice : public LocalDevice {
         cpu_allocator_(cpu_allocator),
         sycl_allocator_(sycl_allocator),
         device_context_(ctx) {
+
+    VLOG(0) << "<Yaniv> VLOG0 SYCLDevice::SYCLDevice";
+    VLOG(1) << "<Yaniv> VLOG0 SYCLDevice::SYCLDevice";
+
     set_eigen_sycl_device(sycl_allocator->getSyclDevice());
   }
 

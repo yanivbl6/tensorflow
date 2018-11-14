@@ -31,6 +31,9 @@ class ThreadPoolDeviceFactory : public DeviceFactory {
   Status CreateDevices(const SessionOptions& options, const string& name_prefix,
                        std::vector<Device*>* devices) override {
     int num_numa_nodes = port::NUMANumNodes();
+
+    VLOG(1) << "<Yaniv> ThreadPoolDeviceFactory::CreateDevices";
+
     int n = 1;
     auto iter = options.config.device_count().find("CPU");
     if (iter != options.config.device_count().end()) {

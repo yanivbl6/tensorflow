@@ -90,6 +90,9 @@ Allocator* GPUProcessState::GetGPUAllocator(const GPUOptions& options,
                                             TfGpuId tf_gpu_id,
                                             size_t total_bytes) {
   CHECK(process_state_);
+
+  VLOG(1) << "<Yaniv> GetGPUAllocator called!";
+
 #if GOOGLE_CUDA
   const string& allocator_type = options.allocator_type();
   mutex_lock lock(mu_);

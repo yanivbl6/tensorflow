@@ -200,6 +200,9 @@ class RdmaMemoryMgr {
 
   // Memory regions
   ibv_mr* FindMemoryRegion(void* addr, size_t length);
+
+  ibv_mr* FindOrInsertMemoryRegion(void* addr, size_t length, const std::string& allocator_name);
+
   void InsertMemoryRegion(void* addr, size_t length,
                           const std::string& allocator_name);
   void EvictMemoryRegion(void* addr, size_t length);
@@ -354,6 +357,7 @@ class RdmaTensorResponse {
   Device* src_dev_ = nullptr;
   TensorBuffer* src_buffer_ = nullptr;
   void* src_addr_ = nullptr;
+  Tensor* src_tensor = nullptr;
   ibv_mr* mr_ = nullptr;
   uint64_t checksum_ = 0;
   bool meta_data_changed_ = false;

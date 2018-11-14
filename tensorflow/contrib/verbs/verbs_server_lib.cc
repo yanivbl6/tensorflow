@@ -94,11 +94,21 @@ Status VerbsServer::Init(ServiceInitFunction service_func,
     CHECK(ChannelCacheFactory(server_def(), &channel_cache_).ok());
     rdma_mgr_ = new RdmaMgr(worker_env(), channel_cache_, ctx);
 
+    VLOG(2) << "RdmaMgr is ready";
+
     // set rdma_mgr for verbs_service and rdma_rendezvous_mgr
     verbs_service_->SetRdmaMgr(rdma_mgr_);
+
+    VLOG(2) << "set RdmaMgr is done";
+
     dynamic_cast<RdmaRendezvousMgr*>(worker_env()->rendezvous_mgr)
         ->SetRdmaMgr(rdma_mgr_);
+
   }
+
+  VLOG(2) << "verbs is initiated";
+
+
   return s;
 }
 

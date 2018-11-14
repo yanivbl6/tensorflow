@@ -53,6 +53,9 @@ ThreadPoolDevice::ThreadPoolDevice(const SessionOptions& options,
   // Early return when MKL is disabled
   if (DisableMKL()) return;
 #ifdef _OPENMP
+
+
+  VLOG(1) << "<Yaniv> ThreadPoolDevice Initiated";
   const char* user_omp_threads = getenv("OMP_NUM_THREADS");
   if (user_omp_threads == nullptr) {
     // OMP_NUM_THREADS controls MKL's intra-op parallelization

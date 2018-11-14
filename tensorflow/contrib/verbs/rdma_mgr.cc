@@ -53,6 +53,7 @@ RdmaMgr::RdmaMgr(const WorkerEnv* const worker_env,
            new RdmaChannel(rdma_adapter_, local_worker_, workers[i])});
     }
   }
+  VLOG(2) << "Rmda_mgr constructor completed " << local_worker_;
 }
 
 // Setup Rdma channels between peers.
@@ -234,9 +235,20 @@ void RdmaMgr::RegMemVisitors(int32_t bus_id) {
   //bus id is current unused
   SubAllocator::Visitor alloc_visitor = [](void* ptr, int numa_node,
                                            size_t num_bytes) {
+    VLOG(1) << "<Yaniv> CPUAllocVisitor called!";
     RdmaMemoryMgr::Singleton().InsertMemoryRegion(
         ptr, num_bytes, strings::StrCat("CPU:", numa_node));
   };
+
+
+  SubAllocator::Visitor cuda_alloc_visitor = [](void* ptr, int numa_node,
+                                           size_t num_bytes) {
+    VLOG(1) << "<Yaniv> CudaAllocVisitor called!";
+    RdmaMemoryMgr::Singleton().InsertMemoryRegion(
+        ptr, num_bytes, strings::StrCat("CPU:", numa_node));
+  };
+
+
   SubAllocator::Visitor free_visitor = [](void* ptr, int numa_node,
                                           size_t num_bytes) {
     RdmaMemoryMgr::Singleton().EvictMemoryRegion(ptr, num_bytes);
@@ -248,21 +260,21 @@ void RdmaMgr::RegMemVisitors(int32_t bus_id) {
 #if GOOGLE_CUDA
   for (int numa_idx = 0; numa_idx < port::NUMANumNodes(); ++numa_idx) {
     GPUProcessState::singleton()->AddCUDAHostAllocVisitor(numa_idx,
-                                                            alloc_visitor);
+                                                            cuda_alloc_visitor);
+    GPUProcessState::singleton()->AddCUDAHostFreeVisitor(numa_idx, free_visitor);
   } 
   if (IsGDRAvailable()) {
     // Note we don't free allocated GPU memory so there is no free visitor
 
     SubAllocator::Visitor cuda_alloc_visitor = [](void* ptr, int gpu_id,
                                                   size_t num_bytes) {
+      VLOG(1) << "<Yaniv> GPUAllocVisitor called!";
       RdmaMemoryMgr::Singleton().InsertMemoryRegion(
           ptr, num_bytes, strings::StrCat("GPU:", gpu_id));
     };
     for (int numa_idx = 0; numa_idx < port::NUMANumNodes(); ++numa_idx) {
       GPUProcessState::singleton()->AddGPUAllocVisitor(numa_idx,
                                                      cuda_alloc_visitor);
-      GPUProcessState::singleton()->AddCUDAHostFreeVisitor(numa_idx, free_visitor);
-
     }
     LOG(INFO) << "Instrumenting Cuda allocators on all numas";
   }

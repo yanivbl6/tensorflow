@@ -1108,6 +1108,11 @@ Status BaseGPUDeviceFactory::CreateGPUDevice(const SessionOptions& options,
   // different (which should be an error).
   //
   // TODO(laigd): report error if memory_limit doesn't match stats.bytes_limit.
+
+  
+  VLOG(1) << "<Yaniv> Created TensorFlow device";
+
+
   BaseGPUDevice* gpu_device = CreateGPUDevice(
       options, device_name, static_cast<Bytes>(stats.bytes_limit), dev_locality,
       tf_gpu_id, GetShortDeviceDescription(platform_gpu_id, desc),

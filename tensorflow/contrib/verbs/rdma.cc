@@ -18,6 +18,7 @@ limitations under the License.
 #include <fcntl.h>
 #include <cstdlib>
 #include <fstream>
+#include <unistd.h>
 
 #include "tensorflow/contrib/verbs/rdma.h"
 #include "tensorflow/contrib/verbs/verbs_service.pb.h"
@@ -39,6 +40,7 @@ limitations under the License.
 #include "tensorflow/core/lib/core/threadpool.h"
 #include "tensorflow/core/lib/hash/hash.h"
 #include "tensorflow/core/lib/random/random.h"
+
 
 namespace tensorflow {
 
@@ -400,6 +402,7 @@ RdmaParams params_init(ibv_context* context) {
   params.timeout = (uint8_t)set_param(TIMEOUT_DEFAULT, "RDMA_TIMEOUT");
   params.retry_cnt = (uint8_t)set_param(RETRY_CNT_DEFAULT, "RDMA_RETRY_CNT");
   params.sl = (uint8_t)set_param(SL_DEFAULT, "RDMA_SL");
+
   CHECK(params.sl <= 7) << "SL value is " << (int)params.sl
                         << ". Valid values are 0-7.";
   params.mtu = set_mtu(params.port_num, context);
@@ -803,8 +806,11 @@ void RdmaMessageBuffer::CreateCPUBuffer(size_t size, bool lock) {
   }
   size_ = size;
   buffer_ = malloc(size_);
+
+
   self_ = ibv_reg_mr(channel_->adapter_->pd_, buffer_, size_,
                      IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+
   CHECK(self_) << "Failed to register memory region";
   buffer_on_host_ = true;
   local_status_ = idle;
@@ -1209,25 +1215,37 @@ void RdmaTensorResponse::SendContent(const Tensor& in, const TensorProto& proto,
   bool can_memcpy = DataTypeCanUseMemcpy(in.dtype());
   size_t tensor_bytes = (can_memcpy) ? in.TotalBytes() : proto.ByteSize();
   uint32_t imm_data = rm_.request_index_;
+
+  VLOG(2) << "RdmaTensorResponse::SendContent";
+
   if (!is_dead) {
     if (can_memcpy) {
       src_buffer_ = const_cast<TensorBuffer*>(DMAHelper::buffer(&in));
       if (src_buffer_ != nullptr) {
         src_buffer_->Ref();  // Keep buffer alive until write is complete
         src_addr_ = src_buffer_->data();
-        mr_ = RdmaMemoryMgr::Singleton().FindMemoryRegion(src_addr_,
-                                                          tensor_bytes);
-        if (mr_ == nullptr && tensor_bytes) {
-          mr_ = ibv_reg_mr(channel_->adapter_->pd_, src_addr_, tensor_bytes,
-                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-        }
+        mr_ = RdmaMemoryMgr::Singleton().FindOrInsertMemoryRegion(src_addr_,tensor_bytes, "SendContent::canMemcpy" );
       }
     } else {
       RDMA_LOG(2) << "Encoding proto: " << rm_.name_
                   << " (Size: " << tensor_bytes << ") " << in.DebugString();
       src_addr_ = malloc(tensor_bytes);
-      mr_ = ibv_reg_mr(channel_->adapter_->pd_, src_addr_, tensor_bytes,
-                       IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+/*
+      src_tensor =
+        new Tensor(ProcessState::singleton()->GetCPUAllocator(0),
+            DT_INT8, TensorShape({tensor_bytes}));
+
+      src_addr_ = DMAHelper::base(src_tensor); 
+*/
+      RdmaMemoryMgr::Singleton().InsertMemoryRegion(src_addr_,tensor_bytes, "Here...");
+
+      //mr_ = RdmaMemoryMgr::Singleton().FindOrInsertMemoryRegion(src_addr_,tensor_bytes, "SendContent::can't Memcpy" );
+      mr_ = RdmaMemoryMgr::Singleton().FindMemoryRegion(src_addr_,tensor_bytes);
+
+      CHECK(mr_ || tensor_bytes > 0) << "Failed to get the memory region!";
+
+      VLOG(2) << "proto.SerializeToArray...";
+ 
       proto.SerializeToArray(src_addr_, tensor_bytes);
     }
   } else {
@@ -1323,6 +1341,9 @@ string RdmaMessage::CreateMessage(const RdmaMessage& rm) {
     memcpy(&message[kNameStartIndex], rm.name_.data(), rm.name_.size());
     memcpy(&message[kRemoteAddrStartIndex], &rm.remote_addr_,
            sizeof(rm.remote_addr_));
+
+    VLOG(2) << "CreateMessage:: rkey = " << std::hex << rm.rkey_;
+
     memcpy(&message[kRkeyStartIndex], &rm.rkey_, sizeof(rm.rkey_));
     memcpy(&message[kStepIdStartIndex], &rm.step_id_, sizeof(rm.step_id_));
   }
@@ -1387,6 +1408,7 @@ void RdmaMessage::ParseMessage(RdmaMessage& rm, void* buffer) {
     memcpy(&rm.remote_addr_, &message[kRemoteAddrStartIndex],
            sizeof(rm.remote_addr_));
     memcpy(&rm.rkey_, &message[kRkeyStartIndex], sizeof(rm.rkey_));
+    VLOG(2) << "ParseMessage:: rkey = " << std::hex   << rm.rkey_;
     memcpy(&rm.step_id_, &message[kStepIdStartIndex], sizeof(rm.step_id_));
   }
   // data_type, tensor_bytes, tensor_shape, is_dead
@@ -1423,11 +1445,51 @@ void RdmaMessage::ParseMessage(RdmaMessage& rm, void* buffer) {
 //*****************************************************************************
 
 ibv_mr* RdmaMemoryMgr::FindMemoryRegion(void* addr, size_t length) {
+
   mutex_lock l(mrs_mu_);
   auto iter = std::upper_bound(mrs_.begin(), mrs_.end(), addr, &Comparator);
   if (iter == std::end(mrs_) || iter->get()->addr > addr) {
+    VLOG(2) << "<Yaniv> Failed to find memory region addr = " << std::hex << (void*)((uint64_t)addr) << ", length = " << length;
     return nullptr;
   } else {
+    VLOG(2) << "<Yaniv> Found memory region addr = " << std::hex << (addr) << ", length = " << length;
+    return iter->get();
+  }
+}
+
+ibv_mr* RdmaMemoryMgr::FindOrInsertMemoryRegion(void* addr, size_t length,
+                                                const std::string& allocator_name) {
+
+
+  CHECK(pd_) << "Oh no! the PD is gone!";
+
+  mutex_lock l(mrs_mu_);
+
+  VLOG(2) << "RdmaMemoryMgr::FindOrInsertMemoryRegion";
+  auto iter = std::upper_bound(mrs_.begin(), mrs_.end(), addr, &Comparator);
+  if (iter == std::end(mrs_) || iter->get()->addr > addr) {
+    VLOG(2) << "RdmaMemoryMgr::FindOrInsertMemoryRegion (1), addr = " <<   std::hex << (void*)((uint64_t)addr) << ", length = " << length;
+
+    if (length == 0) return nullptr;
+
+
+
+    ibv_mr* mr = ibv_reg_mr(pd_, addr, length,
+                IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    VLOG(2) << "RdmaMemoryMgr::FindOrInsertMemoryRegion (5)";
+    VLOG(1) << "<Yaniv> Insert (not found) memory region 0x" << std::hex << mr->rkey << ". ["
+                << addr << "-" << (void*)((uint64_t)addr + length - 1) << "]"
+                << " SIZE: 0x" << length << " (" << allocator_name << ").";
+    if (mr != nullptr) {
+      VLOG(2) << "RdmaMemoryMgr::FindOrInsertMemoryRegion (4)";
+      mrs_.insert(iter, {mr, &MRDeleter});
+    } else {
+      VLOG(1) << "<Yaniv> Register Memory Region Failed!";
+    }
+    VLOG(2) << "RdmaMemoryMgr::FindOrInsertMemoryRegion (2)";
+    return mr;
+  } else {
+    VLOG(2) << "RdmaMemoryMgr::FindOrInsertMemoryRegion (3)";
     return iter->get();
   }
 }
@@ -1437,7 +1499,7 @@ void RdmaMemoryMgr::InsertMemoryRegion(void* addr, size_t length,
   if (length == 0) return;
   ibv_mr* mr = ibv_reg_mr(pd_, addr, length,
                           IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
-  RDMA_LOG(1) << "Insert memory region 0x" << std::hex << mr->rkey << ". ["
+  VLOG(1) << "<Yaniv> Insert memory region 0x" << std::hex << mr->rkey << ". ["
               << addr << "-" << (void*)((uint64_t)addr + length - 1) << "]"
               << " SIZE: 0x" << length << " (" << allocator_name << ").";
   if (mr != nullptr) {
@@ -1542,9 +1604,20 @@ void RdmaTensorRequest::DeallocateTensors() {
 }
 
 bool RdmaTensorRequest::AllocateTensors() {
+/*
   result_tensor_ =
       new Tensor(dst_dev_->GetAllocator(recv_args_.alloc_attrs),
                  meta_data_->data_type_, meta_data_->tensor_shape_);
+*/
+  if (dst_dev_->tensorflow_gpu_device_info()){
+    result_tensor_ =
+      new Tensor(GPUProcessState::singleton()->GetCUDAHostAllocator(0),
+                 meta_data_->data_type_, meta_data_->tensor_shape_);
+  } else {
+    result_tensor_ =
+      new Tensor(ProcessState::singleton()->GetCPUAllocator(0),
+                 meta_data_->data_type_, meta_data_->tensor_shape_);
+  }
 
   size_t tensor_size = result_tensor_->TotalBytes();
   bool can_memcpy = DataTypeCanUseMemcpy(result_tensor_->dtype());
@@ -1553,24 +1626,35 @@ bool RdmaTensorRequest::AllocateTensors() {
       return true;
     }
     rdma_addr_ = DMAHelper::base(result_tensor_);
+    VLOG(1) << "<Yaniv> Can copy- registering memory region";
     mr_ = RdmaMemoryMgr::Singleton().FindMemoryRegion(rdma_addr_, tensor_size);
+
 #if GOOGLE_CUDA
     if (mr_ == nullptr) {
-      // Can't RDMA directly to result. Use a proxy.
+      if (dst_dev_->tensorflow_gpu_device_info()){
+        VLOG(1) << "<Yaniv> Failed - allocating memory region on GPU";
+      }else{
+        VLOG(1) << "<Yaniv> Failed - allocating memory region";
+      }
       proxy_tensor_ =
           new Tensor(GPUProcessState::singleton()->GetCUDAHostAllocator(0),
                      result_tensor_->dtype(), result_tensor_->shape());
+
+
+      // Can't RDMA directly to result. Use a proxy.
       rdma_addr_ = DMAHelper::base(proxy_tensor_);
       mr_ =
           RdmaMemoryMgr::Singleton().FindMemoryRegion(rdma_addr_, tensor_size);
     }
 #endif
   } else {
+    VLOG(1) << "<Yaniv> Can not copy- registering memory region";
     uint32_t proto_size = meta_data_->proto_size_;
     rdma_addr_ = malloc(proto_size);
-    mr_ = ibv_reg_mr(RdmaMemoryMgr::Singleton().pd_, rdma_addr_, proto_size,
-                     IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE);
+    mr_ =
+        RdmaMemoryMgr::Singleton().FindOrInsertMemoryRegion(rdma_addr_, proto_size, "last chance");
   }
+
   CHECK(mr_ != nullptr) << " No memory region found for address " << rdma_addr_
                         << ": " << key_;
   return true;
@@ -1636,9 +1720,6 @@ void RdmaTensorRequest::RecvTensorContent() {
   RDMA_LOG(1) << "Step 0x" << std::hex << step_id_ << std::dec
               << ": Received tensor content #" << index_ << ": " << key_
               << " (Size: 0x" << std::hex << message_size << ")";
-
-  Tensor val;
-
 #if GOOGLE_CUDA
   if (proxy_tensor_ != nullptr) {
     CountCopies(key_, (void*)DMAHelper::base(proxy_tensor_),

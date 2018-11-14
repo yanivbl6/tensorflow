@@ -73,6 +73,8 @@ ProcessState::MemDesc ProcessState::PtrType(const void* ptr) {
 
 Allocator* ProcessState::GetCPUAllocator(int numa_node) {
   if (!numa_enabled_ || numa_node == port::kNUMANoAffinity) numa_node = 0;
+
+  VLOG(1) << "<Yaniv> GetCPUAllocator called!";
   mutex_lock lock(mu_);
   while (cpu_allocators_.size() <= static_cast<size_t>(numa_node)) {
     // If visitors have been defined we need an Allocator built from

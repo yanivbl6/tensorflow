@@ -38,6 +38,8 @@ limitations under the License.
 #include "tensorflow/core/platform/tracing.h"
 #include "tensorflow/core/util/util.h"
 
+#include "tensorflow/core/platform/stacktrace.h"
+
 // IMPLEMENTATION NOTE:
 //
 // 1. Within this module, we intentionally LOG(FATAL) if any stream
@@ -307,6 +309,7 @@ void GPUUtil::CopyCPUTensorToGPU(const Tensor* cpu_tensor,
   Status s = PrepareCopy(gpu_device, device_context, *cpu_tensor, gpu_tensor,
                          &dev_info, &recv_stream);
   if (!s.ok()) {
+    VLOG(1) << tensorflow::CurrentStackTrace();
     done(s);
     return;
   }

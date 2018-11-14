@@ -83,6 +83,10 @@ class GPUCompatibleCPUDevice : public ThreadPoolDevice {
                          Bytes memory_limit, const DeviceLocality& locality,
                          Allocator* allocator)
       : ThreadPoolDevice(options, name, memory_limit, locality, allocator) {
+
+
+    VLOG(1) << "<Yaniv> GPUCompatibleCPUDeviceFactory::GPUCompatibleCPUDevice";
+
     if (options.config.has_gpu_options()) {
       force_gpu_compatible_ =
           options.config.gpu_options().force_gpu_compatible();
@@ -109,6 +113,9 @@ class GPUCompatibleCPUDeviceFactory : public DeviceFactory {
  public:
   Status CreateDevices(const SessionOptions& options, const string& name_prefix,
                        std::vector<Device*>* devices) override {
+
+
+    VLOG(1) << "<Yaniv> GPUCompatibleCPUDeviceFactory::CreateDevices";
     int n = 1;
     auto iter = options.config.device_count().find("CPU");
     if (iter != options.config.device_count().end()) {

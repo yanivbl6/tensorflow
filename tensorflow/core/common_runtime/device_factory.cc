@@ -68,6 +68,9 @@ void DeviceFactory::Register(const string& device_type, DeviceFactory* factory,
   std::unique_ptr<DeviceFactory> factory_ptr(factory);
   std::unordered_map<string, FactoryItem>& factories = device_factories();
   auto iter = factories.find(device_type);
+
+  VLOG(1) <<"<Yaniv> Registered device: " << device_type;
+
   if (iter == factories.end()) {
     factories[device_type] = {std::move(factory_ptr), priority};
   } else {
@@ -94,6 +97,9 @@ Status DeviceFactory::AddDevices(const SessionOptions& options,
                                  std::vector<Device*>* devices) {
   // CPU first. A CPU device is required.
   auto cpu_factory = GetFactory("CPU");
+
+  VLOG(1) << "<Yaniv> DeviceFactory::AddDevices CPU " << ((cpu_factory)?"True":"False");
+
   if (!cpu_factory) {
     return errors::NotFound(
         "CPU Factory not registered.  Did you link in threadpool_device?");
@@ -108,6 +114,7 @@ Status DeviceFactory::AddDevices(const SessionOptions& options,
   mutex_lock l(*get_device_factory_lock());
   for (auto& p : device_factories()) {
     auto factory = p.second.factory.get();
+    VLOG(1) << "<Yaniv> DeviceFactory::AddDevices GPU " << ((factory!= cpu_factory)?"True":"False");
     if (factory != cpu_factory) {
       TF_RETURN_IF_ERROR(factory->CreateDevices(options, name_prefix, devices));
     }
