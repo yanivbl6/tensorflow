@@ -247,12 +247,19 @@ class PerStepCollectiveRemoteAccess;
 
 // A step-specific object that can execute a collective operation completely
 // described by a CollectiveParams object.
+
+
+typedef std::unique_ptr<void> ColCtx;
+
 class CollectiveExecutor : public PeerAccessInterface, public core::RefCounted {
  public:
   virtual void StartAbort(const Status& s) {}
 
+  virtual ColCtx Init(const CollectiveParams& col_params) {return NULL;}
+
   virtual void ExecuteAsync(OpKernelContext* ctx,
                             const CollectiveParams& col_params,
+                            void* impl_col_ctx,
                             const string& exec_key, StatusCallback done) {
     done(errors::Internal(
         "A collective Op has been called in a context in which "

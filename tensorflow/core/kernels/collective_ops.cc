@@ -21,6 +21,7 @@ limitations under the License.
 namespace tensorflow {
 
 namespace {
+
 class CollectiveOpKernel : public AsyncOpKernel {
  public:
   explicit CollectiveOpKernel(OpKernelConstruction* c) : AsyncOpKernel(c) {}
@@ -60,6 +61,7 @@ class CollectiveOpKernel : public AsyncOpKernel {
   }
 
   CollectiveParams col_params_;
+  ColCtx impl_col_ctx;
 };
 
 class CollectiveReduceOpKernel : public CollectiveOpKernel {
@@ -103,6 +105,14 @@ class CollectiveReduceOpKernel : public CollectiveOpKernel {
                  &(*sub_node.mutable_attr())["T"]);
     col_params_.merge_op = BuildOpKernel(c, merge_op_name, &sub_node);
     col_params_.final_op = BuildOpKernel(c, final_op_name, &sub_node);
+
+    CollectiveExecutor* col_exec = GET_COLLECTIVE_EXECUTOR(c);
+    impl_col_ctx = col_exec->init(col_params <,col_exec->remote_access()>);
+
+    //If the collective executor is not initialize yet, or remote_access is not available yet,
+    //another approach could be to add this CollectiveOpKernel to a shared list and 
+    //the collective context once the remote_access and col_exec when they are ready.
+
   }
 
   std::unique_ptr<OpKernel> BuildOpKernel(OpKernelConstruction* c,
@@ -150,7 +160,7 @@ class CollectiveReduceOpKernel : public CollectiveOpKernel {
       OP_REQUIRES_OK_ASYNC(c, s, done);
       done();
     };
-    col_exec->ExecuteAsync(c, col_params_, GetCollectiveKey(c), actual_done);
+    col_exec->ExecuteAsync(c, col_params_, impl_col_ctx , GetCollectiveKey(c), actual_done);
   }
 
  private:
