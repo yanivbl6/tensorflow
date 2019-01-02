@@ -21,7 +21,6 @@ limitations under the License.
 namespace tensorflow {
 
 namespace {
-
 class CollectiveOpKernel : public AsyncOpKernel {
  public:
   explicit CollectiveOpKernel(OpKernelConstruction* c) : AsyncOpKernel(c) {}
@@ -112,7 +111,6 @@ class CollectiveReduceOpKernel : public CollectiveOpKernel {
     //If the collective executor is not initialize yet, or remote_access is not available yet,
     //another approach could be to add this CollectiveOpKernel to a shared list and 
     //the collective context once the remote_access and col_exec when they are ready.
-
   }
 
   std::unique_ptr<OpKernel> BuildOpKernel(OpKernelConstruction* c,

@@ -246,9 +246,7 @@ class PeerAccessInterface {
 class PerStepCollectiveRemoteAccess;
 
 // A step-specific object that can execute a collective operation completely
-// described by a CollectiveParams object.
-
-
+// described by a CollectiveParams object
 typedef std::unique_ptr<void> ColCtx;
 
 class CollectiveExecutor : public PeerAccessInterface, public core::RefCounted {
